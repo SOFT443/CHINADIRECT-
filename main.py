@@ -63,7 +63,7 @@ class AdminStates(StatesGroup):
 def main_menu():
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="📦 Каталог", callback_data="catalog"),
+        InlineKeyboardButton(text="📄 Скачать каталог", callback_data="catalog"),
         InlineKeyboardButton(text="🛒 Корзина", callback_data="view_cart")
     )
     builder.row(
@@ -71,9 +71,23 @@ def main_menu():
     )
     return builder.as_markup()
 
+def catalog_format_menu():
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="📄 PDF (красивый)", callback_data="get_pdf"),
+        InlineKeyboardButton(text="📊 Excel (для опта)", callback_data="get_excel")
+    )
+    builder.row(
+        InlineKeyboardButton(text="📦 ZIP (фото+прайс)", callback_data="get_zip")
+    )
+    builder.row(
+        InlineKeyboardButton(text="◀️ Главное меню", callback_data="main_menu")
+    )
+    return builder.as_markup()
+
 def categories_menu():
     builder = InlineKeyboardBuilder()
-    categories = [" Двери", " Покрытия", " Мебель", " Другое"]
+    categories = ["🚪 Двери", "🧱 Покрытия", "🛋 Мебель", "🪟 Другое"]
     for cat in categories:
         builder.row(InlineKeyboardButton(text=cat, callback_data=f"cat_{cat}"))
     builder.row(InlineKeyboardButton(text="◀️ Главное меню", callback_data="main_menu"))
@@ -92,213 +106,112 @@ def product_buttons(product_id):
 async def start(message: Message):
     await message.answer(
         "🇨🇳 Добро пожаловать в Импортный Агрегатор!\n\n"
-        " Двери |  Покрытия |  Мебель\n"
+        "🚪 Двери | 🧱 Покрытия | 🛋 Мебель\n"
         "🇨🇳 Прямые поставки из Китая\n\n"
-        "Выберите действие:",
+        "📥 Скачайте наш каталог или свяжитесь с менеджером:",
         reply_markup=main_menu()
     )
 
-# ================= КАТАЛОГ =================
+# ================= КАТАЛОГ (ВЫБОР ФОРМАТА) =================
 @dp.callback_query(F.data == "catalog")
-async def show_catalog(callback: CallbackQuery):
+async def show_catalog_options(callback: CallbackQuery):
     await callback.message.edit_text(
-        "📂 Выберите категорию:",
-        reply_markup=categories_menu()
+        "📄 <b>Выберите формат каталога:</b>\n\n"
+        "• PDF — красивый каталог для презентации\n"
+        "• Excel — для сортировки и фильтрации\n"
+        "• ZIP — все фото отдельно + прайс-лист\n\n"
+        "Все файлы содержат фото, названия и цены товаров.",
+        parse_mode="HTML",
+        reply_markup=catalog_format_menu()
     )
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("cat_"))
-async def show_products(callback: CallbackQuery):
-    category = callback.data.replace("cat_", "")
+# ================= ГЕНЕРАЦИЯ И ОТПРАВКА КАТАЛОГА =================
+@dp.callback_query(F.data == "get_pdf")
+async def send_pdf_catalog(callback: CallbackQuery):
+    await callback.answer("⏳ Генерирую PDF...", show_alert=True)
     
-    conn = sqlite3.connect('shop.db')
-    cur = conn.cursor()
-    cur.execute("SELECT id, name, price FROM products WHERE category=?", (category,))
-    products = cur.fetchall()
-    conn.close()
-    
-    if not products:
-        await callback.answer("Товаров пока нет", show_alert=True)
-        return
-    
-    builder = InlineKeyboardBuilder()
-    for prod_id, name, price in products:
-        builder.row(InlineKeyboardButton(
-            text=f"{name} - {price}",
-            callback_data=f"prod_{prod_id}"
-        ))
-    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="catalog"))
-    
-    await callback.message.edit_text(
-        f"📂 {category}\nВыберите товар:",
-        reply_markup=builder.as_markup()
-    )
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("prod_"))
-async def show_product(callback: CallbackQuery):
-    product_id = int(callback.data.replace("prod_", ""))
-    
-    conn = sqlite3.connect('shop.db')
-    cur = conn.cursor()
-    cur.execute("SELECT name, description, price, photo_path FROM products WHERE id=?", (product_id,))
-    product = cur.fetchone()
-    conn.close()
-    
-    if not product:
-        await callback.answer("Товар не найден", show_alert=True)
-        return
-    
-    name, desc, price, photo_path = product
-    
-    text = f"<b>{name}</b>\n\n📝 {desc}\n\n💰 {price}\n\n🕒 Точную цену и сроки уточняйте у менеджера"
-    
-    if photo_path and os.path.exists(photo_path):
-        photo = FSInputFile(photo_path)
+    try:
+        from generate_catalog import create_catalog_pdf
+        pdf_path = create_catalog_pdf()
+        
+        if not pdf_path or not os.path.exists(pdf_path):
+            await callback.message.answer("❌ Ошибка создания PDF. Попробуйте позже.")
+            return
+        
+        doc = FSInputFile(pdf_path)
+        await callback.message.answer_document(
+            document=doc,
+            caption="📄 <b>Каталог товаров (PDF)</b>\n\n"
+                    "📥 Скачайте и выберите товары.\n"
+                    "💬 Для заказа напишите артикулы менеджеру.\n\n"
+                    "🇨🇳 Цены и сроки уточняйте индивидуально.",
+            parse_mode="HTML"
+        )
         await callback.message.delete()
-        await callback.message.answer_photo(
-            photo=photo,
-            caption=text,
-            parse_mode="HTML",
-            reply_markup=product_buttons(product_id)
-        )
-    else:
-        await callback.message.edit_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=product_buttons(product_id)
-        )
-    await callback.answer()
+        
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {str(e)}")
 
-# ================= КОРЗИНА =================
-@dp.callback_query(F.data.startswith("add_"))
-async def add_to_cart(callback: CallbackQuery):
-    product_id = int(callback.data.replace("add_", ""))
-    user_id = callback.from_user.id
+@dp.callback_query(F.data == "get_excel")
+async def send_excel_catalog(callback: CallbackQuery):
+    await callback.answer("⏳ Генерирую Excel...", show_alert=True)
     
-    conn = sqlite3.connect('shop.db')
-    cur = conn.cursor()
-    
-    cur.execute(
-        "INSERT INTO cart (user_id, product_id, quantity) VALUES (?, ?, 1) "
-        "ON CONFLICT(user_id, product_id) DO UPDATE SET quantity = quantity + 1",
-        (user_id, product_id)
-    )
-    conn.commit()
-    conn.close()
-    
-    await callback.answer("✅ Добавлено в корзину!", show_alert=True)
+    try:
+        from generate_excel import create_excel_catalog
+        excel_path = create_excel_catalog()
+        
+        if not excel_path or not os.path.exists(excel_path):
+            await callback.message.answer("❌ Ошибка создания Excel. Попробуйте позже.")
+            return
+        
+        doc = FSInputFile(excel_path)
+        await callback.message.answer_document(
+            document=doc,
+            caption="📊 <b>Прайс-лист (Excel)</b>\n\n"
+                    "📥 Скачайте для фильтрации и сортировки.\n"
+                    "💬 Для заказа напишите артикулы менеджеру.\n\n"
+                    "🇨🇳 Цены и сроки уточняйте индивидуально.",
+            parse_mode="HTML"
+        )
+        await callback.message.delete()
+        
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {str(e)}")
 
+@dp.callback_query(F.data == "get_zip")
+async def send_zip_catalog(callback: CallbackQuery):
+    await callback.answer("⏳ Создаю архив...", show_alert=True)
+    
+    try:
+        from generate_zip import create_zip_catalog
+        zip_path = create_zip_catalog()
+        
+        if not zip_path or not os.path.exists(zip_path):
+            await callback.message.answer("❌ Ошибка создания ZIP. Попробуйте позже.")
+            return
+        
+        doc = FSInputFile(zip_path)
+        await callback.message.answer_document(
+            document=doc,
+            caption="📦 <b>Архив с каталогом (ZIP)</b>\n\n"
+                    "📁 Внутри архива:\n"
+                    "• 📊 catalog.csv — прайс-лист\n"
+                    "• 🖼 images/ — все фото товаров\n"
+                    "• 📄 README.txt — инструкция\n\n"
+                    "💬 Для заказа напишите артикулы менеджеру.\n\n"
+                    "🇨🇳 Цены и сроки уточняйте индивидуально.",
+            parse_mode="HTML"
+        )
+        await callback.message.delete()
+        
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {str(e)}")
+
+# ================= КОРЗИНА (БАЗОВАЯ, ОПЦИОНАЛЬНО) =================
 @dp.callback_query(F.data == "view_cart")
 async def view_cart(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    
-    conn = sqlite3.connect('shop.db')
-    cur = conn.cursor()
-    cur.execute('''
-        SELECT p.name, p.price, c.quantity, p.id
-        FROM cart c
-        JOIN products p ON c.product_id = p.id
-        WHERE c.user_id = ?
-    ''', (user_id,))
-    items = cur.fetchall()
-    conn.close()
-    
-    if not items:
-        await callback.answer("Корзина пуста", show_alert=True)
-        return
-    
-    text = "🛒 <b>Ваша корзина:</b>\n\n"
-    total = 0
-    builder = InlineKeyboardBuilder()
-    
-    for name, price, qty, prod_id in items:
-        # Извлекаем число из цены
-        price_num = ''.join(filter(str.isdigit, price))
-        if price_num:
-            total += int(price_num) * qty
-        text += f"• {name} x{qty} = {price}\n"
-        builder.row(InlineKeyboardButton(
-            text=f"❌ Убрать {name}",
-            callback_data=f"remove_{prod_id}"
-        ))
-    
-    text += f"\n<b>Примерная сумма:</b> {total} руб."
-    
-    builder.row(
-        InlineKeyboardButton(text="📝 Оформить заказ", callback_data="checkout"),
-        InlineKeyboardButton(text="◀️ Назад", callback_data="catalog")
-    )
-    
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("remove_"))
-async def remove_from_cart(callback: CallbackQuery):
-    product_id = int(callback.data.replace("remove_", ""))
-    user_id = callback.from_user.id
-    
-    conn = sqlite3.connect('shop.db')
-    cur = conn.cursor()
-    cur.execute("DELETE FROM cart WHERE user_id=? AND product_id=?", (user_id, product_id))
-    conn.commit()
-    conn.close()
-    
-    await callback.answer("🗑 Удалено", show_alert=True)
-    await view_cart(callback)
-
-# ================= ОФОРМЛЕНИЕ ЗАКАЗА =================
-@dp.callback_query(F.data == "checkout")
-async def checkout(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    
-    conn = sqlite3.connect('shop.db')
-    cur = conn.cursor()
-    cur.execute('''
-        SELECT p.name, p.price, c.quantity
-        FROM cart c
-        JOIN products p ON c.product_id = p.id
-        WHERE c.user_id = ?
-    ''', (user_id,))
-    items = cur.fetchall()
-    
-    cur.execute("DELETE FROM cart WHERE user_id=?", (user_id,))
-    conn.commit()
-    conn.close()
-    
-    if not items:
-        await callback.answer("Корзина пуста", show_alert=True)
-        return
-    
-    order_text = f"🆕 <b>НОВЫЙ ЗАКАЗ!</b>\n\n"
-    order_text += f"👤 Клиент: @{callback.from_user.username or 'нет username'} (ID: {user_id})\n"
-    order_text += f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-    order_text += "<b>Товары:</b>\n"
-    
-    total = 0
-    for name, price, qty in items:
-        price_num = ''.join(filter(str.isdigit, price))
-        if price_num:
-            total += int(price_num) * qty
-        order_text += f"• {name} x{qty} = {price}\n"
-    
-    order_text += f"\n<b>Итого:</b> {total} руб."
-    
-    # Отправляем админам
-    for admin_id in ADMIN_IDS:
-        try:
-            await bot.send_message(admin_id, order_text, parse_mode="HTML")
-        except:
-            pass
-    
-    await callback.message.edit_text(
-        "✅ <b>Заказ принят!</b>\n\n"
-        "Свяжемся с вами для уточнения деталей.\n"
-        "Спасибо! 🇨🇳",
-        parse_mode="HTML",
-        reply_markup=main_menu()
-    )
-    await callback.answer()
+    await callback.answer("🛒 Корзина пока в разработке. Используйте каталог для заказа!", show_alert=True)
 
 # ================= СВЯЗЬ С МЕНЕДЖЕРОМ =================
 @dp.callback_query(F.data == "contact_manager")
@@ -313,7 +226,8 @@ async def contact_manager(callback: CallbackQuery):
             pass
     
     await callback.message.edit_text(
-        "📞 Менеджер свяжется с вами в ближайшее время!",
+        "📞 Менеджер свяжется с вами в ближайшее время!\n"
+        "Ожидайте звонка или сообщения.",
         reply_markup=main_menu()
     )
     await callback.answer()
@@ -336,7 +250,7 @@ async def add_category(message: Message, state: FSMContext):
 @dp.message(AdminStates.waiting_for_name)
 async def add_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await message.answer("Введите <b>описание</b>:", parse_mode="HTML")
+    await message.answer("Введите <b>описание</b> товара:", parse_mode="HTML")
     await state.set_state(AdminStates.waiting_for_description)
 
 @dp.message(AdminStates.waiting_for_description)
@@ -378,11 +292,39 @@ async def add_photo(message: Message, state: FSMContext):
     await message.answer("✅ Товар добавлен!")
     await state.clear()
 
+# ================= АДМИНКА: ОБНОВЛЕНИЕ КАТАЛОГА =================
+@dp.message(Command("update"))
+async def update_catalog(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("⛔ Нет прав")
+        return
+    
+    await message.answer("⏳ Обновляю каталоги...")
+    
+    try:
+        from generate_catalog import create_catalog_pdf
+        from generate_excel import create_excel_catalog
+        from generate_zip import create_zip_catalog
+        
+        pdf = create_catalog_pdf()
+        excel = create_excel_catalog()
+        zip_file = create_zip_catalog()
+        
+        result = "✅ <b>Все каталоги обновлены!</b>\n\n"
+        result += f"📄 PDF: {'✅' if pdf else '❌'}\n"
+        result += f"📊 Excel: {'✅' if excel else '❌'}\n"
+        result += f"📦 ZIP: {'✅' if zip_file else '❌'}\n"
+        
+        await message.answer(result, parse_mode="HTML")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {str(e)}")
+
 # ================= НАЗАД В ГЛАВНОЕ =================
 @dp.callback_query(F.data == "main_menu")
 async def back_main(callback: CallbackQuery):
     await callback.message.edit_text(
-        "🇨🇳 Главное меню:",
+        "🇨🇳 Главное меню:\nВыберите действие:",
         reply_markup=main_menu()
     )
     await callback.answer()
