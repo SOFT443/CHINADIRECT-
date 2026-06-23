@@ -6,7 +6,7 @@ from telebot import types
 import time
 import threading
 import logging
-from flask import Flask, request
+from flask import Flask
 import os
 
 # ================= КОНФИГ =================
@@ -23,18 +23,15 @@ app = Flask(__name__)
 
 @app.route('/')
 def health_check():
-    """Просто отвечаем, что бот жив"""
     return f"🤖 Бот работает! {get_current_datetime()}", 200
 
 @app.route('/ping')
 def ping():
-    """Проверка работоспособности"""
     return f"PONG! {get_current_datetime()}", 200
 
 def run_web_server():
-    """Запускаем веб-сервер в отдельном потоке"""
     port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, threaded=True)
 
 # ================= БАЗА ДАННЫХ =================
 def init_db():
@@ -103,9 +100,24 @@ def get_current_datetime():
 # ================= ОБРАБОТЧИКИ КЛИЕНТА =================
 @bot.message_handler(commands=['start'])
 def start(message):
+    user_id = message.from_user.id
+    
+    # Если это админ — показываем только админ-панель
+    if user_id in ADMIN_IDS:
+        bot.send_message(
+            user_id,
+            f"👑 <b>Панель администратора</b>\n\n"
+            f"📅 {get_current_datetime()}",
+            parse_mode="HTML",
+            reply_markup=admin_menu()
+        )
+        return
+    
+    # Для обычных клиентов — приветствие с меню
     bot.send_message(
-        message.chat.id,
-        f"🇨🇳 <b>ЗДРАВСТВУЙТЕ - МЫ ИМПОРТНЫЙ АГРЕГАТОР</b>\n\n"
+        user_id,
+        f"Здравствуйте!\n\n"
+        f"🇨🇳 <b>ИМПОРТНЫЙ АГРЕГАТОР</b>\n\n"
         f"🚪 Двери | 🧱 Покрытия | 🛋 Мебель\n"
         f"🇨🇳 Прямые поставки из Китая\n\n"
         f"📅 {get_current_datetime()}\n\n"
@@ -113,15 +125,6 @@ def start(message):
         parse_mode="HTML",
         reply_markup=main_menu()
     )
-    
-    if message.from_user.id in ADMIN_IDS:
-        bot.send_message(
-            message.chat.id,
-            f"👑 <b>Панель администратора</b>\n\n"
-            f"📅 {get_current_datetime()}",
-            parse_mode="HTML",
-            reply_markup=admin_menu()
-        )
 
 @bot.callback_query_handler(func=lambda call: call.data == "new_order")
 def new_order(call):
@@ -286,6 +289,7 @@ def contact_manager(call):
 @bot.callback_query_handler(func=lambda call: call.data == "back")
 def back(call):
     bot.edit_message_text(
+        f"Здравствуйте!\n\n"
         f"🇨🇳 <b>ИМПОРТНЫЙ АГРЕГАТОР</b>\n\n"
         f"🚪 Двери | 🧱 Покрытия | 🛋 Мебель\n"
         f"🇨🇳 Прямые поставки из Китая\n\n"
@@ -602,7 +606,7 @@ def reject_order(call):
 
 # ================= ЗАПУСК =================
 if __name__ == "__main__":
-    logging.info(f"🚀 Бот запущен {get_current_datetime()}")
+    logging.info(f"🚀 Бот запущен! {get_current_datetime()}")
     logging.info(f"Канал ID: {CHANNEL_ID}")
     
     # Запускаем веб-сервер в отдельном потоке
