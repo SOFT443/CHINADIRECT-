@@ -7,13 +7,13 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton
 
 # ================= КОНФИГУРАЦИЯ =================
-API_TOKEN = '8657473893:AAGngc2DPixc3rLDZsw52BGMORgOfjMfxk4'  # Замени на свой токен
-ADMIN_IDS = 7293950231  # Замени на свой Telegram ID (можно добавить несколько)
+API_TOKEN = 'ТВОЙ_ТОКЕН_СЮДА'  # Замени на свой токен от @BotFather
+ADMIN_IDS = [123456789]  # Замени на свой Telegram ID (узнай у @userinfobot)
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
@@ -30,8 +30,7 @@ def init_db():
             category TEXT,
             name TEXT,
             description TEXT,
-            price TEXT,
-            photo_path TEXT
+            price TEXT
         )
     ''')
     
@@ -57,13 +56,12 @@ init_db()
 
 # ================= СОСТОЯНИЯ =================
 class OrderStates(StatesGroup):
-    waiting_for_product = State()
     waiting_for_quantity = State()
 
 class AdminStates(StatesGroup):
-    waiting_for_username = State()
-    waiting_for_product = State()
-    waiting_for_quantity = State()
+    waiting_for_category = State()
+    waiting_for_name = State()
+    waiting_for_description = State()
     waiting_for_price = State()
 
 # ================= КЛАВИАТУРЫ =================
@@ -156,7 +154,7 @@ async def show_product_detail(callback: CallbackQuery):
     
     conn = sqlite3.connect('shop.db')
     cur = conn.cursor()
-    cur.execute("SELECT name, description, price, photo_path FROM products WHERE id=?", (product_id,))
+    cur.execute("SELECT name, description, price FROM products WHERE id=?", (product_id,))
     product = cur.fetchone()
     conn.close()
     
@@ -164,7 +162,7 @@ async def show_product_detail(callback: CallbackQuery):
         await callback.answer("Товар не найден", show_alert=True)
         return
     
-    name, desc, price, photo_path = product
+    name, desc, price = product
     
     text = f"📦 <b>{name}</b>\n\n"
     text += f"📝 {desc}\n\n"
@@ -172,21 +170,11 @@ async def show_product_detail(callback: CallbackQuery):
     text += "🔄 Для заказа нажмите кнопку ниже.\n"
     text += "Менеджер свяжется с вами для уточнения деталей."
     
-    if photo_path and os.path.exists(photo_path):
-        photo = FSInputFile(photo_path)
-        await callback.message.delete()
-        await callback.message.answer_photo(
-            photo=photo,
-            caption=text,
-            parse_mode="HTML",
-            reply_markup=product_buttons(product_id)
-        )
-    else:
-        await callback.message.edit_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=product_buttons(product_id)
-        )
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=product_buttons(product_id)
+    )
     await callback.answer()
 
 # ================= ОФОРМЛЕНИЕ ЗАКАЗА (КЛИЕНТ) =================
@@ -306,7 +294,6 @@ async def show_my_orders(callback: CallbackQuery):
     for order in orders:
         order_id, product, qty, price, status, created, confirmed = order
         
-        # Статус с эмодзи
         status_emoji = {
             'новый': '🟡',
             'в обработке': '🟠',
@@ -340,7 +327,6 @@ async def confirm_order(message: Message):
         await message.answer("⛔ У вас нет прав для подтверждения заказов")
         return
     
-    # Парсим команду: /confirm username товар количество цена
     parts = message.text.split(maxsplit=4)
     if len(parts) < 5:
         await message.answer(
@@ -358,7 +344,6 @@ async def confirm_order(message: Message):
     quantity = int(parts[3])
     price = parts[4]
     
-    # Ищем заказ в БД
     conn = sqlite3.connect('shop.db')
     cur = conn.cursor()
     cur.execute(
@@ -379,7 +364,6 @@ async def confirm_order(message: Message):
     
     order_id, user_id = order
     
-    # Обновляем статус заказа
     cur.execute(
         "UPDATE orders SET price=?, status='подтверждён', confirmed_at=? WHERE id=?",
         (price, datetime.now().strftime('%d.%m.%Y %H:%M'), order_id)
@@ -387,7 +371,6 @@ async def confirm_order(message: Message):
     conn.commit()
     conn.close()
     
-    # Отправляем уведомление клиенту
     try:
         await bot.send_message(
             user_id,
@@ -508,27 +491,13 @@ async def add_description(message: Message, state: FSMContext):
 
 @dp.message(AdminStates.waiting_for_price)
 async def add_price(message: Message, state: FSMContext):
-    await state.update_data(price=message.text)
-    await message.answer("📸 Отправьте <b>фото</b> товара:", parse_mode="HTML")
-    await state.set_state(AdminStates.waiting_for_photo)
-
-@dp.message(AdminStates.waiting_for_photo, F.photo)
-async def add_photo(message: Message, state: FSMContext):
     data = await state.get_data()
-    
-    if not os.path.exists("images"):
-        os.makedirs("images")
-    
-    photo = message.photo[-1]
-    file = await bot.get_file(photo.file_id)
-    file_path = f"images/{photo.file_id}.jpg"
-    await bot.download_file(file.file_path, file_path)
     
     conn = sqlite3.connect('shop.db')
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO products (category, name, description, price, photo_path) VALUES (?, ?, ?, ?, ?)",
-        (data['category'], data['name'], data['description'], data['price'], file_path)
+        "INSERT INTO products (category, name, description, price) VALUES (?, ?, ?, ?)",
+        (data['category'], data['name'], data['description'], message.text)
     )
     conn.commit()
     conn.close()
