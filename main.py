@@ -6,15 +6,35 @@ from telebot import types
 import time
 import threading
 import logging
+from flask import Flask, request
+import os
 
 # ================= КОНФИГ =================
 API_TOKEN = '8657473893:AAGngc2DPixc3rLDZsw52BGMORgOfjMfxk4'
 ADMIN_IDS = [7293950231, 1372806444]
 RENDER_URL = 'https://chinadirect.onrender.com'
-CHANNEL_ID = -1003944933503  # ID чата для дублирования завершённых заказов
+CHANNEL_ID = -1003944933503
 
 bot = telebot.TeleBot(API_TOKEN)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# ================= ВЕБ-СЕРВЕР (чтобы Render не усыплял) =================
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    """Просто отвечаем, что бот жив"""
+    return f"🤖 Бот работает! {get_current_datetime()}", 200
+
+@app.route('/ping')
+def ping():
+    """Проверка работоспособности"""
+    return f"PONG! {get_current_datetime()}", 200
+
+def run_web_server():
+    """Запускаем веб-сервер в отдельном потоке"""
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
 
 # ================= БАЗА ДАННЫХ =================
 def init_db():
@@ -39,7 +59,7 @@ def init_db():
 
 init_db()
 
-# ================= КЛАВИАТУРЫ ДЛЯ КЛИЕНТА =================
+# ================= КЛАВИАТУРЫ =================
 def main_menu():
     keyboard = types.InlineKeyboardMarkup(row_width=1)
     btn1 = types.InlineKeyboardButton("🛒 Сделать заказ", callback_data="new_order")
@@ -56,7 +76,6 @@ def categories_menu():
     keyboard.add(types.InlineKeyboardButton("◀️ Назад", callback_data="back"))
     return keyboard
 
-# ================= КЛАВИАТУРЫ ДЛЯ АДМИНА =================
 def admin_menu():
     keyboard = types.InlineKeyboardMarkup(row_width=1)
     keyboard.add(
@@ -81,33 +100,25 @@ def order_actions(order_id, user_id, product_name):
 def get_current_datetime():
     return datetime.now().strftime('%d.%m.%Y %H:%M:%S')
 
-def get_current_date():
-    return datetime.now().strftime('%d.%m.%Y')
-
-def get_current_time():
-    return datetime.now().strftime('%H:%M:%S')
-
 # ================= ОБРАБОТЧИКИ КЛИЕНТА =================
 @bot.message_handler(commands=['start'])
 def start(message):
-    # Показываем клиенту меню
     bot.send_message(
         message.chat.id,
-        f"🇨🇳 <b>ИМПОРТНЫЙ АГРЕГАТОР</b>\n\n"
+        f"🇨🇳 <b>ЗДРАВСТВУЙТЕ - МЫ ИМПОРТНЫЙ АГРЕГАТОР</b>\n\n"
         f"🚪 Двери | 🧱 Покрытия | 🛋 Мебель\n"
         f"🇨🇳 Прямые поставки из Китая\n\n"
-        f"📅 {get_current_date()} {get_current_time()}\n\n"
+        f"📅 {get_current_datetime()}\n\n"
         f"Выберите действие:",
         parse_mode="HTML",
         reply_markup=main_menu()
     )
     
-    # Если это админ, показываем только админ-панель (без клиентского меню)
     if message.from_user.id in ADMIN_IDS:
         bot.send_message(
             message.chat.id,
             f"👑 <b>Панель администратора</b>\n\n"
-            f"📅 {get_current_date()} {get_current_time()}",
+            f"📅 {get_current_datetime()}",
             parse_mode="HTML",
             reply_markup=admin_menu()
         )
@@ -116,7 +127,7 @@ def start(message):
 def new_order(call):
     bot.edit_message_text(
         f"📂 <b>Выберите категорию:</b>\n\n"
-        f"📅 {get_current_date()} {get_current_time()}",
+        f"📅 {get_current_datetime()}",
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
         parse_mode="HTML",
@@ -130,9 +141,8 @@ def choose_category(call):
     msg = bot.send_message(
         call.message.chat.id,
         f"📂 <b>{category}</b>\n\n"
-        f"Введите <b>название</b> товара, который хотите заказать:\n"
-        f"Например: Дверь Венеция, Ламинат 8мм, Диван угловой\n\n"
-        f"📅 {get_current_date()} {get_current_time()}",
+        f"Введите <b>название</b> товара:\n\n"
+        f"📅 {get_current_datetime()}",
         parse_mode="HTML"
     )
     bot.register_next_step_handler(msg, get_product_name, category)
@@ -155,7 +165,6 @@ def get_product_name(message, category):
     conn.commit()
     conn.close()
     
-    # Отправляем уведомление админам
     for admin_id in ADMIN_IDS:
         try:
             bot.send_message(
@@ -164,8 +173,7 @@ def get_product_name(message, category):
                 f"👤 Клиент: @{username} (ID: {user_id})\n"
                 f"📂 Категория: {category}\n"
                 f"📦 Товар: {product_name}\n"
-                f"📅 Время создания: {created_at}\n\n"
-                f"Свяжитесь с клиентом и подтвердите заказ:",
+                f"📅 Время: {created_at}",
                 parse_mode="HTML",
                 reply_markup=order_actions(order_id, user_id, product_name)
             )
@@ -175,14 +183,13 @@ def get_product_name(message, category):
     bot.send_message(
         message.chat.id,
         f"✅ <b>Заказ #{order_id} принят!</b>\n\n"
-        f"📦 Товар: {product_name}\n"
-        f"📅 Время заказа: {created_at}\n\n"
-        f"Менеджер свяжется с вами в ближайшее время.\n"
-        f"Статус заказа можно отслеживать в разделе «Мои заказы».",
+        f"📦 {product_name}\n"
+        f"📅 {created_at}",
         parse_mode="HTML",
         reply_markup=main_menu()
     )
 
+# ================= ОСТАЛЬНЫЕ КОМАНДЫ =================
 @bot.callback_query_handler(func=lambda call: call.data == "my_orders")
 def my_orders(call):
     user_id = call.from_user.id
@@ -200,7 +207,7 @@ def my_orders(call):
     if not orders:
         bot.edit_message_text(
             f"📋 <b>У вас пока нет заказов</b>\n\n"
-            f"📅 {get_current_date()} {get_current_time()}",
+            f"📅 {get_current_datetime()}",
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             parse_mode="HTML",
@@ -210,7 +217,7 @@ def my_orders(call):
         return
     
     text = f"📋 <b>МОИ ЗАКАЗЫ</b>\n\n"
-    text += f"📅 {get_current_date()} {get_current_time()}\n"
+    text += f"📅 {get_current_datetime()}\n"
     text += "─" * 20 + "\n\n"
     
     for order in orders:
@@ -268,7 +275,7 @@ def contact_manager(call):
     
     bot.edit_message_text(
         f"📞 <b>Менеджер свяжется с вами в ближайшее время!</b>\n\n"
-        f"📅 {get_current_date()} {get_current_time()}",
+        f"📅 {get_current_datetime()}",
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
         parse_mode="HTML",
@@ -282,7 +289,7 @@ def back(call):
         f"🇨🇳 <b>ИМПОРТНЫЙ АГРЕГАТОР</b>\n\n"
         f"🚪 Двери | 🧱 Покрытия | 🛋 Мебель\n"
         f"🇨🇳 Прямые поставки из Китая\n\n"
-        f"📅 {get_current_date()} {get_current_time()}\n\n"
+        f"📅 {get_current_datetime()}\n\n"
         f"Выберите действие:",
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
@@ -321,7 +328,7 @@ def admin_panel(call):
     if not orders:
         bot.edit_message_text(
             f"📋 <b>Нет заказов в статусе «{status}»</b>\n\n"
-            f"📅 {get_current_date()} {get_current_time()}",
+            f"📅 {get_current_datetime()}",
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             parse_mode="HTML",
@@ -331,7 +338,7 @@ def admin_panel(call):
         return
     
     text = f"📋 <b>ЗАКАЗЫ В СТАТУСЕ «{status.upper()}»</b>\n\n"
-    text += f"📅 {get_current_date()} {get_current_time()}\n"
+    text += f"📅 {get_current_datetime()}\n"
     text += "─" * 20 + "\n\n"
     
     for order in orders:
@@ -379,7 +386,7 @@ def message_client(call):
         username = None
     
     text = f"💬 <b>Связаться с клиентом</b>\n\n"
-    text += f"📅 {get_current_date()} {get_current_time()}\n"
+    text += f"📅 {get_current_datetime()}\n"
     text += f"👤 ID: {user_id}\n"
     
     if username:
@@ -457,7 +464,7 @@ def back_to_order(call):
         )
     bot.answer_callback_query(call.id)
 
-# ================= ПОДТВЕРЖДЕНИЕ ЗАКАЗА (через кнопку) =================
+# ================= ПОДТВЕРЖДЕНИЕ ЗАКАЗА =================
 @bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_"))
 def confirm_order(call):
     if call.from_user.id not in ADMIN_IDS:
@@ -473,8 +480,8 @@ def confirm_order(call):
         call.message.chat.id,
         f"📦 <b>Заказ #{order_id}</b>\n\n"
         f"Товар: {product_name}\n"
-        f"📅 {get_current_date()} {get_current_time()}\n\n"
-        f"Введите <b>количество</b> (например: 2, 5, 10):",
+        f"📅 {get_current_datetime()}\n\n"
+        f"Введите <b>количество</b>:",
         parse_mode="HTML"
     )
     bot.register_next_step_handler(msg, process_confirm_quantity, order_id, user_id, product_name, call.from_user.id)
@@ -501,7 +508,6 @@ def process_confirm_quantity(message, order_id, user_id, product_name, admin_id)
     )
     conn.commit()
     
-    # Получаем данные заказа для дублирования
     cur.execute("SELECT user_id, username, product_name, quantity FROM orders WHERE id=?", (order_id,))
     order_data = cur.fetchone()
     conn.close()
@@ -509,55 +515,56 @@ def process_confirm_quantity(message, order_id, user_id, product_name, admin_id)
     if order_data:
         user_id, username, product_name, qty = order_data
         
-        # Отправляем уведомление клиенту с датой и временем
         try:
             bot.send_message(
                 user_id,
-                f"✅ <b>ЗАКАЗ #{order_id} ПОДТВЕРЖДЁН!</b>\n\n"
-                f"📦 Товар: {product_name}\n"
-                f"🔢 Количество: {qty} шт.\n"
-                f"📅 Дата подтверждения: {confirmed_at}\n\n"
-                f"Менеджер свяжется с вами для уточнения деталей.",
+                f"✅ <b>ЗАКАЗ #{order_id} ПОДТВЕРЖДЁН</b>\n\n"
+                f"📦 {product_name}\n"
+                f"🔢 {qty} шт.\n"
+                f"📅 {confirmed_at}",
                 parse_mode="HTML"
             )
         except:
             pass
         
-        # Получаем инфо о менеджере
         try:
             admin_info = bot.get_chat(admin_id)
             admin_name = admin_info.username or str(admin_id)
         except:
             admin_name = str(admin_id)
         
-        # Дублируем в канал
         try:
-            bot.send_message(
-                CHANNEL_ID,
+            channel_msg = (
                 f"✅ <b>ЗАКАЗ #{order_id} ЗАВЕРШЁН</b>\n\n"
-                f"👤 <b>Клиент:</b> @{username} (ID: {user_id})\n"
-                f"👑 <b>Менеджер:</b> @{admin_name}\n"
-                f"📦 <b>Товар:</b> {product_name}\n"
-                f"🔢 <b>Количество:</b> {qty} шт.\n"
-                f"📅 <b>Время создания:</b> {confirmed_at}\n"
-                f"📅 <b>Время завершения:</b> {completed_at}",
-                parse_mode="HTML"
+                f"👤 Клиент: @{username} (ID: {user_id})\n"
+                f"👑 Менеджер: @{admin_name}\n"
+                f"📦 Товар: {product_name}\n"
+                f"🔢 Количество: {qty} шт.\n"
+                f"📅 Создан: {confirmed_at}\n"
+                f"📅 Завершён: {completed_at}"
             )
+            
+            bot.send_message(CHANNEL_ID, channel_msg, parse_mode="HTML")
+            logging.info(f"Заказ #{order_id} отправлен в канал {CHANNEL_ID}")
+            
         except Exception as e:
-            logging.error(f"Не удалось отправить в канал: {e}")
+            logging.error(f"Ошибка отправки в канал {CHANNEL_ID}: {e}")
+            for admin_id in ADMIN_IDS:
+                try:
+                    bot.send_message(admin_id, f"⚠️ Не удалось отправить заказ #{order_id} в канал. Ошибка: {e}")
+                except:
+                    pass
     
     bot.reply_to(
         message,
-        f"✅ <b>Заказ #{order_id} подтверждён!</b>\n\n"
-        f"📦 Товар: {product_name}\n"
-        f"🔢 Количество: {quantity} шт.\n"
-        f"📅 Время подтверждения: {confirmed_at}\n\n"
-        f"Клиент получил уведомление.\n"
-        f"Заказ продублирован в канал.",
+        f"✅ Заказ #{order_id} подтверждён\n\n"
+        f"📦 {product_name}\n"
+        f"🔢 {quantity} шт.\n"
+        f"📅 {confirmed_at}",
         parse_mode="HTML"
     )
 
-# ================= ОТМЕНА ЗАКАЗА (через кнопку) =================
+# ================= ОТМЕНА ЗАКАЗА =================
 @bot.callback_query_handler(func=lambda call: call.data.startswith("reject_"))
 def reject_order(call):
     if call.from_user.id not in ADMIN_IDS:
@@ -593,24 +600,15 @@ def reject_order(call):
     )
     bot.answer_callback_query(call.id)
 
-# ================= ПИНГОВАНИЕ =================
-def ping_self():
-    """Каждые 30 секунд пингует себя, чтобы Render не засыпал"""
-    while True:
-        try:
-            response = requests.get(RENDER_URL, timeout=10)
-            logging.info(f"[PING] {get_current_datetime()} - Status: {response.status_code}")
-        except Exception as e:
-            logging.error(f"[PING ERROR] {get_current_datetime()} - {e}")
-        time.sleep(30)
-
 # ================= ЗАПУСК =================
 if __name__ == "__main__":
-    logging.info(f"🚀 Бот запущен! {get_current_datetime()}")
+    logging.info(f"🚀 Бот запущен {get_current_datetime()}")
+    logging.info(f"Канал ID: {CHANNEL_ID}")
     
-    # Запускаем пингование в фоновом потоке
-    ping_thread = threading.Thread(target=ping_self, daemon=True)
-    ping_thread.start()
+    # Запускаем веб-сервер в отдельном потоке
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+    logging.info("🌐 Веб-сервер запущен на порту 10000")
     
     # Запускаем бота
     bot.infinity_polling()
