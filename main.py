@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+import requests
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -10,8 +11,9 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
 
 # ================= КОНФИГ =================
-API_TOKEN = '8657473893:AAGngc2DPixc3rLDZsw52BGMORgOfjMfxk4'
-ADMIN_IDS = [7293950231]  # ТВОЙ TELEGRAM ID
+API_TOKEN = '8657473893:AAGngc2DPixc3rLDZsw52BGMORgOfjMfxk4'  # Замени на свой токен от @BotFather
+ADMIN_IDS = [7293950231]  # Замени на свой Telegram ID (узнай у @userinfobot)
+RENDER_URL = 'https://chinadirect.onrender.com'  # Замени на URL твоего бота на Render
 
 bot = Bot(token=API_TOKEN)
 storage = MemoryStorage()
@@ -64,6 +66,8 @@ def categories_menu():
 async def start(message: types.Message):
     await message.answer(
         "🇨🇳 <b>ИМПОРТНЫЙ АГРЕГАТОР</b>\n\n"
+        "🚪 Двери | 🧱 Покрытия | 🛋 Мебель\n"
+        "🇨🇳 Прямые поставки из Китая\n\n"
         "Выберите действие:",
         parse_mode="HTML",
         reply_markup=main_menu()
@@ -102,7 +106,7 @@ async def get_product_name(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     username = message.from_user.username or "без username"
     
-    # Сохраняем заказ
+    # Сохраняем заказ в базу
     conn = sqlite3.connect('shop.db')
     cur = conn.cursor()
     cur.execute(
@@ -114,7 +118,7 @@ async def get_product_name(message: types.Message, state: FSMContext):
     conn.commit()
     conn.close()
     
-    # Отправляем уведомление админу
+    # Отправляем уведомление менеджеру
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
@@ -211,7 +215,7 @@ async def approve_order(message: types.Message):
     product_name = parts[2]
     quantity = parts[3]
     
-    # Находим заказ
+    # Ищем заказ в базе
     conn = sqlite3.connect('shop.db')
     cur = conn.cursor()
     cur.execute(
@@ -231,7 +235,7 @@ async def approve_order(message: types.Message):
     
     order_id, user_id = order
     
-    # Обновляем заказ
+    # Обновляем статус заказа
     cur.execute(
         "UPDATE orders SET quantity=?, status='утверждён' WHERE id=?",
         (quantity, order_id)
@@ -259,6 +263,38 @@ async def approve_order(message: types.Message):
         f"🔢 {quantity} шт."
     )
 
+# ================= ОТМЕНА ЗАКАЗА (АДМИН) =================
+@dp.message_handler(Command("cancel"))
+async def cancel_order(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("⛔ Нет прав")
+        return
+    
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(
+            "❌ Используйте: <code>/cancel @username</code>",
+            parse_mode="HTML"
+        )
+        return
+    
+    username = parts[1].replace('@', '')
+    
+    conn = sqlite3.connect('shop.db')
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE orders SET status='отменён' WHERE username=? AND status='новый'",
+        (username,)
+    )
+    affected = cur.rowcount
+    conn.commit()
+    conn.close()
+    
+    if affected > 0:
+        await message.answer(f"✅ Отменены все активные заказы для @{username}")
+    else:
+        await message.answer(f"❌ Нет активных заказов для @{username}")
+
 # ================= СВЯЗЬ С МЕНЕДЖЕРОМ =================
 @dp.callback_query_handler(lambda c: c.data == "contact")
 async def contact_manager(callback: types.CallbackQuery):
@@ -266,28 +302,47 @@ async def contact_manager(callback: types.CallbackQuery):
         try:
             await bot.send_message(
                 admin_id,
-                f"📞 Клиент @{callback.from_user.username} хочет связаться"
+                f"📞 Клиент @{callback.from_user.username or 'без username'} хочет связаться"
             )
         except:
             pass
     
     await callback.message.edit_text(
-        "📞 Менеджер свяжется с вами в ближайшее время!",
+        "📞 <b>Менеджер свяжется с вами в ближайшее время!</b>",
+        parse_mode="HTML",
         reply_markup=main_menu()
     )
     await callback.answer()
 
-# ================= НАЗАД =================
+# ================= НАЗАД В ГЛАВНОЕ МЕНЮ =================
 @dp.callback_query_handler(lambda c: c.data == "back")
 async def back(callback: types.CallbackQuery):
     await callback.message.edit_text(
         "🇨🇳 <b>ИМПОРТНЫЙ АГРЕГАТОР</b>\n\n"
+        "🚪 Двери | 🧱 Покрытия | 🛋 Мебель\n"
+        "🇨🇳 Прямые поставки из Китая\n\n"
         "Выберите действие:",
         parse_mode="HTML",
         reply_markup=main_menu()
     )
     await callback.answer()
 
+# ================= ПИНГОВАНИЕ (чтоб бот не засыпал) =================
+async def ping_self():
+    """Каждую минуту пингует себя, чтобы Render не засыпал"""
+    while True:
+        try:
+            response = requests.get(RENDER_URL, timeout=10)
+            print(f"[PING] {datetime.now().strftime('%H:%M:%S')} - Status: {response.status_code}")
+        except Exception as e:
+            print(f"[PING ERROR] {e}")
+        await asyncio.sleep(60)  # Пауза 60 секунд
+
 # ================= ЗАПУСК =================
 if __name__ == "__main__":
+    # Запускаем пингование в фоновом режиме
+    loop = asyncio.get_event_loop()
+    loop.create_task(ping_self())
+    
+    # Запускаем бота
     executor.start_polling(dp, skip_updates=True)
