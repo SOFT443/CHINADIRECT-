@@ -4,19 +4,18 @@ import sqlite3
 import aiohttp
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.client.default import DefaultBotProperties
 
 # ================= КОНФИГУРАЦИЯ =================
-API_TOKEN = '8657473893:AAGngc2DPixc3rLDZsw52BGMORgOfjMfxk4'  # Замени на свой токен
-ADMIN_IDS = [7293950231]  # Замени на свой Telegram ID
-RENDER_URL = 'https://chinadirect.onrender.com'  # Замени на URL твоего сервиса
+API_TOKEN = '8657473893:AAGngc2DPixc3rLDZsw52BGMORgOfjMfxk4'
+ADMIN_IDS = [7293950231]  # Твой Telegram ID
+RENDER_URL = 'https://chinadirect.onrender.com'  # URL твоего бота
 
-# Инициализация бота с новым синтаксисом
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
@@ -174,7 +173,7 @@ async def start_order(callback: CallbackQuery, state: FSMContext):
     await state.set_state(OrderStates.waiting_for_quantity)
     await callback.answer()
 
-@dp.message(StateFilter(OrderStates.waiting_for_quantity))
+@dp.message(OrderStates.waiting_for_quantity)
 async def process_quantity(message: Message, state: FSMContext):
     try:
         quantity = int(message.text)
@@ -261,7 +260,7 @@ async def show_my_orders(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=main_menu())
     await callback.answer()
 
-# ================= КОНФИРМАЦИЯ ЗАКАЗА (АДМИН) =================
+# ================= КОНФИРМАЦИЯ ЗАКАЗА =================
 @dp.message(Command("confirm"))
 async def confirm_order(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -317,7 +316,7 @@ async def confirm_order(message: Message):
     
     await message.answer(f"✅ Заказ #{order_id} подтверждён для @{username}")
 
-# ================= ОТМЕНА ЗАКАЗА (АДМИН) =================
+# ================= ОТМЕНА ЗАКАЗА =================
 @dp.message(Command("cancel"))
 async def cancel_order(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -339,7 +338,7 @@ async def cancel_order(message: Message):
     
     await message.answer(f"✅ Отменены заказы для @{username}" if affected > 0 else f"❌ Нет активных заказов для @{username}")
 
-# ================= КОНТАКТ С МЕНЕДЖЕРОМ =================
+# ================= КОНТАКТ =================
 @dp.callback_query(F.data == "contact_manager")
 async def contact_manager(callback: CallbackQuery):
     for admin_id in ADMIN_IDS:
@@ -357,7 +356,7 @@ async def contact_manager(callback: CallbackQuery):
     )
     await callback.answer()
 
-# ================= НАЗАД В ГЛАВНОЕ =================
+# ================= НАЗАД =================
 @dp.callback_query(F.data == "main_menu")
 async def back_main(callback: CallbackQuery):
     await callback.message.edit_text(
@@ -366,7 +365,7 @@ async def back_main(callback: CallbackQuery):
     )
     await callback.answer()
 
-# ================= АДМИНКА: ДОБАВЛЕНИЕ ТОВАРОВ =================
+# ================= ДОБАВЛЕНИЕ ТОВАРОВ =================
 @dp.message(Command("add"))
 async def cmd_add(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
@@ -375,25 +374,25 @@ async def cmd_add(message: Message, state: FSMContext):
     await message.answer("Введите <b>категорию</b> (Двери, Настенные покрытия, Напольные покрытия, Мебель, Другое):")
     await state.set_state(AdminStates.waiting_for_category)
 
-@dp.message(StateFilter(AdminStates.waiting_for_category))
+@dp.message(AdminStates.waiting_for_category)
 async def add_category(message: Message, state: FSMContext):
     await state.update_data(category=message.text)
     await message.answer("Введите <b>название</b> товара:")
     await state.set_state(AdminStates.waiting_for_name)
 
-@dp.message(StateFilter(AdminStates.waiting_for_name))
+@dp.message(AdminStates.waiting_for_name)
 async def add_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text)
     await message.answer("Введите <b>описание</b> товара:")
     await state.set_state(AdminStates.waiting_for_description)
 
-@dp.message(StateFilter(AdminStates.waiting_for_description))
+@dp.message(AdminStates.waiting_for_description)
 async def add_description(message: Message, state: FSMContext):
     await state.update_data(description=message.text)
     await message.answer("Введите <b>цену</b> (например: от 15000 руб.):")
     await state.set_state(AdminStates.waiting_for_price)
 
-@dp.message(StateFilter(AdminStates.waiting_for_price))
+@dp.message(AdminStates.waiting_for_price)
 async def add_price(message: Message, state: FSMContext):
     data = await state.get_data()
     conn = sqlite3.connect('shop.db')
@@ -407,7 +406,7 @@ async def add_price(message: Message, state: FSMContext):
     await message.answer("✅ Товар добавлен!")
     await state.clear()
 
-# ================= ФУНКЦИЯ ДЛЯ ПИНГОВАНИЯ =================
+# ================= ПИНГОВАНИЕ =================
 async def ping_self():
     while True:
         try:
@@ -421,9 +420,7 @@ async def ping_self():
 # ================= ЗАПУСК =================
 async def main():
     logging.basicConfig(level=logging.INFO)
-    # Запускаем пингование в фоновом режиме
     asyncio.create_task(ping_self())
-    # Запускаем бота
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
