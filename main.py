@@ -2,24 +2,23 @@ import asyncio
 import logging
 import sqlite3
 import aiohttp
-import time
 from datetime import datetime
-from aiogram import Bot, types
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.dispatcher import Dispatcher, FSMContext
-from aiogram.dispatcher.filters import Command
-from aiogram.dispatcher.filters.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from aiogram.utils import executor
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.client.default import DefaultBotProperties
 
 # ================= КОНФИГУРАЦИЯ =================
-API_TOKEN = '8657473893:AAGngc2DPixc3rLDZsw52BGMORgOfjMfxk4'  # Замени на свой токен от @BotFather
+API_TOKEN = '8657473893:AAGngc2DPixc3rLDZsw52BGMORgOfjMfxk4'  # Замени на свой токен
 ADMIN_IDS = [7293950231]  # Замени на свой Telegram ID
-RENDER_URL = 'https://chinadirect.onrender.com'  # Замени на URL твоего сервиса на Render
+RENDER_URL = 'https://chinadirect.onrender.com'  # Замени на URL твоего сервиса
 
-bot = Bot(token=API_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(bot, storage=storage)
+# Инициализация бота с новым синтаксисом
+bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+dp = Dispatcher()
 
 # ================= БАЗА ДАННЫХ =================
 def init_db():
@@ -64,53 +63,51 @@ class AdminStates(StatesGroup):
 
 # ================= КЛАВИАТУРЫ =================
 def main_menu():
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    keyboard.add(
-        InlineKeyboardButton("📦 Каталог", callback_data="catalog"),
-        InlineKeyboardButton("📋 Мои заказы", callback_data="my_orders")
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="📦 Каталог", callback_data="catalog"),
+        InlineKeyboardButton(text="📋 Мои заказы", callback_data="my_orders")
     )
-    keyboard.add(
-        InlineKeyboardButton("📞 Связаться с менеджером", callback_data="contact_manager")
+    builder.row(
+        InlineKeyboardButton(text="📞 Связаться с менеджером", callback_data="contact_manager")
     )
-    return keyboard
+    return builder.as_markup()
 
 def categories_menu():
-    keyboard = InlineKeyboardMarkup(row_width=1)
+    builder = InlineKeyboardBuilder()
     categories = ["🚪 Двери", "🧱 Настенные покрытия", "🧱 Напольные покрытия", "🛋 Мебель", "🪟 Другое"]
     for cat in categories:
-        keyboard.add(InlineKeyboardButton(cat, callback_data=f"cat_{cat}"))
-    keyboard.add(InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu"))
-    return keyboard
+        builder.row(InlineKeyboardButton(text=cat, callback_data=f"cat_{cat}"))
+    builder.row(InlineKeyboardButton(text="◀️ Главное меню", callback_data="main_menu"))
+    return builder.as_markup()
 
 def product_buttons(product_id):
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    keyboard.add(InlineKeyboardButton("🛒 Заказать", callback_data=f"order_{product_id}"))
-    keyboard.add(InlineKeyboardButton("◀️ Назад", callback_data="catalog"))
-    return keyboard
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🛒 Заказать", callback_data=f"order_{product_id}"))
+    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="catalog"))
+    return builder.as_markup()
 
 # ================= СТАРТ =================
-@dp.message_handler(Command("start"))
-async def start(message: types.Message):
+@dp.message(Command("start"))
+async def start(message: Message):
     await message.answer(
         "🇨🇳 <b>ИМПОРТНЫЙ АГРЕГАТОР</b>\n\n"
         "🚪 Двери | 🧱 Покрытия | 🛋 Мебель\n"
         "🇨🇳 Прямые поставки из Китая\n\n"
         "⬇️ Выберите действие:",
-        parse_mode="HTML",
         reply_markup=main_menu()
     )
 
 # ================= КАТАЛОГ =================
-@dp.callback_query_handler(lambda c: c.data == "catalog")
+@dp.callback_query(F.data == "catalog")
 async def show_catalog(callback: CallbackQuery):
     await callback.message.edit_text(
         "📂 <b>Выберите категорию:</b>",
-        parse_mode="HTML",
         reply_markup=categories_menu()
     )
     await callback.answer()
 
-@dp.callback_query_handler(lambda c: c.data.startswith("cat_"))
+@dp.callback_query(F.data.startswith("cat_"))
 async def show_products(callback: CallbackQuery):
     category = callback.data.replace("cat_", "")
     conn = sqlite3.connect('shop.db')
@@ -123,19 +120,18 @@ async def show_products(callback: CallbackQuery):
         await callback.answer("В этой категории пока нет товаров", show_alert=True)
         return
     
-    keyboard = InlineKeyboardMarkup(row_width=1)
+    builder = InlineKeyboardBuilder()
     for prod_id, name, price in products:
-        keyboard.add(InlineKeyboardButton(f"{name} - {price}", callback_data=f"prod_{prod_id}"))
-    keyboard.add(InlineKeyboardButton("◀️ Назад", callback_data="catalog"))
+        builder.row(InlineKeyboardButton(text=f"{name} - {price}", callback_data=f"prod_{prod_id}"))
+    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="catalog"))
     
     await callback.message.edit_text(
         f"📂 <b>{category}</b>\nВыберите товар:",
-        parse_mode="HTML",
-        reply_markup=keyboard
+        reply_markup=builder.as_markup()
     )
     await callback.answer()
 
-@dp.callback_query_handler(lambda c: c.data.startswith("prod_"))
+@dp.callback_query(F.data.startswith("prod_"))
 async def show_product_detail(callback: CallbackQuery):
     product_id = int(callback.data.replace("prod_", ""))
     conn = sqlite3.connect('shop.db')
@@ -153,13 +149,12 @@ async def show_product_detail(callback: CallbackQuery):
     
     await callback.message.edit_text(
         text,
-        parse_mode="HTML",
         reply_markup=product_buttons(product_id)
     )
     await callback.answer()
 
 # ================= ЗАКАЗ =================
-@dp.callback_query_handler(lambda c: c.data.startswith("order_"))
+@dp.callback_query(F.data.startswith("order_"))
 async def start_order(callback: CallbackQuery, state: FSMContext):
     product_id = int(callback.data.replace("order_", ""))
     conn = sqlite3.connect('shop.db')
@@ -174,14 +169,13 @@ async def start_order(callback: CallbackQuery, state: FSMContext):
     
     await state.update_data(product_name=product[0])
     await callback.message.answer(
-        f"🛒 <b>Оформление заказа</b>\n\nТовар: {product[0]}\n\nВведите <b>количество</b>:",
-        parse_mode="HTML"
+        f"🛒 <b>Оформление заказа</b>\n\nТовар: {product[0]}\n\nВведите <b>количество</b>:"
     )
-    await OrderStates.waiting_for_quantity.set()
+    await state.set_state(OrderStates.waiting_for_quantity)
     await callback.answer()
 
-@dp.message_handler(state=OrderStates.waiting_for_quantity)
-async def process_quantity(message: types.Message, state: FSMContext):
+@dp.message(StateFilter(OrderStates.waiting_for_quantity))
+async def process_quantity(message: Message, state: FSMContext):
     try:
         quantity = int(message.text)
         if quantity <= 0:
@@ -217,21 +211,19 @@ async def process_quantity(message: types.Message, state: FSMContext):
                 f"🔢 Количество: {quantity}\n"
                 f"📅 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
                 f"После согласования подтвердите:\n"
-                f"<code>/confirm {username} {product_name} {quantity} 15000</code>",
-                parse_mode="HTML"
+                f"<code>/confirm {username} {product_name} {quantity} 15000</code>"
             )
         except:
             pass
     
     await message.answer(
         f"✅ <b>Заказ #{order_id} оформлен!</b>\n\nМенеджер свяжется с вами.",
-        parse_mode="HTML",
         reply_markup=main_menu()
     )
-    await state.finish()
+    await state.clear()
 
 # ================= МОИ ЗАКАЗЫ =================
-@dp.callback_query_handler(lambda c: c.data == "my_orders")
+@dp.callback_query(F.data == "my_orders")
 async def show_my_orders(callback: CallbackQuery):
     user_id = callback.from_user.id
     conn = sqlite3.connect('shop.db')
@@ -247,7 +239,6 @@ async def show_my_orders(callback: CallbackQuery):
     if not orders:
         await callback.message.edit_text(
             "📋 <b>У вас пока нет заказов</b>",
-            parse_mode="HTML",
             reply_markup=main_menu()
         )
         await callback.answer()
@@ -267,16 +258,12 @@ async def show_my_orders(callback: CallbackQuery):
         text += f"📌 Статус: <b>{status.upper()}</b>\n"
         text += "─" * 20 + "\n"
     
-    await callback.message.edit_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=main_menu()
-    )
+    await callback.message.edit_text(text, reply_markup=main_menu())
     await callback.answer()
 
 # ================= КОНФИРМАЦИЯ ЗАКАЗА (АДМИН) =================
-@dp.message_handler(Command("confirm"))
-async def confirm_order(message: types.Message):
+@dp.message(Command("confirm"))
+async def confirm_order(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("⛔ Нет прав")
         return
@@ -284,8 +271,7 @@ async def confirm_order(message: types.Message):
     parts = message.text.split(maxsplit=4)
     if len(parts) < 5:
         await message.answer(
-            "❌ Используйте: <code>/confirm @username товар количество цена</code>",
-            parse_mode="HTML"
+            "❌ Используйте: <code>/confirm @username товар количество цена</code>"
         )
         return
     
@@ -324,8 +310,7 @@ async def confirm_order(message: types.Message):
             f"📦 Товар: {product_name}\n"
             f"🔢 Количество: {quantity}\n"
             f"💰 Цена: {price} руб.\n\n"
-            f"🤝 Спасибо за заказ!",
-            parse_mode="HTML"
+            f"🤝 Спасибо за заказ!"
         )
     except:
         pass
@@ -333,15 +318,15 @@ async def confirm_order(message: types.Message):
     await message.answer(f"✅ Заказ #{order_id} подтверждён для @{username}")
 
 # ================= ОТМЕНА ЗАКАЗА (АДМИН) =================
-@dp.message_handler(Command("cancel"))
-async def cancel_order(message: types.Message):
+@dp.message(Command("cancel"))
+async def cancel_order(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("⛔ Нет прав")
         return
     
     parts = message.text.split(maxsplit=2)
     if len(parts) < 2:
-        await message.answer("❌ Используйте: <code>/cancel @username</code>", parse_mode="HTML")
+        await message.answer("❌ Используйте: <code>/cancel @username</code>")
         return
     
     username = parts[1].replace('@', '')
@@ -355,7 +340,7 @@ async def cancel_order(message: types.Message):
     await message.answer(f"✅ Отменены заказы для @{username}" if affected > 0 else f"❌ Нет активных заказов для @{username}")
 
 # ================= КОНТАКТ С МЕНЕДЖЕРОМ =================
-@dp.callback_query_handler(lambda c: c.data == "contact_manager")
+@dp.callback_query(F.data == "contact_manager")
 async def contact_manager(callback: CallbackQuery):
     for admin_id in ADMIN_IDS:
         try:
@@ -368,50 +353,48 @@ async def contact_manager(callback: CallbackQuery):
     
     await callback.message.edit_text(
         "📞 <b>Менеджер свяжется с вами!</b>",
-        parse_mode="HTML",
         reply_markup=main_menu()
     )
     await callback.answer()
 
 # ================= НАЗАД В ГЛАВНОЕ =================
-@dp.callback_query_handler(lambda c: c.data == "main_menu")
+@dp.callback_query(F.data == "main_menu")
 async def back_main(callback: CallbackQuery):
     await callback.message.edit_text(
         "🇨🇳 <b>ИМПОРТНЫЙ АГРЕГАТОР</b>\n\n⬇️ Выберите действие:",
-        parse_mode="HTML",
         reply_markup=main_menu()
     )
     await callback.answer()
 
 # ================= АДМИНКА: ДОБАВЛЕНИЕ ТОВАРОВ =================
-@dp.message_handler(Command("add"))
-async def cmd_add(message: types.Message, state: FSMContext):
+@dp.message(Command("add"))
+async def cmd_add(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("⛔ Нет прав")
         return
-    await message.answer("Введите <b>категорию</b> (Двери, Настенные покрытия, Напольные покрытия, Мебель, Другое):", parse_mode="HTML")
-    await AdminStates.waiting_for_category.set()
+    await message.answer("Введите <b>категорию</b> (Двери, Настенные покрытия, Напольные покрытия, Мебель, Другое):")
+    await state.set_state(AdminStates.waiting_for_category)
 
-@dp.message_handler(state=AdminStates.waiting_for_category)
-async def add_category(message: types.Message, state: FSMContext):
+@dp.message(StateFilter(AdminStates.waiting_for_category))
+async def add_category(message: Message, state: FSMContext):
     await state.update_data(category=message.text)
-    await message.answer("Введите <b>название</b> товара:", parse_mode="HTML")
-    await AdminStates.waiting_for_name.set()
+    await message.answer("Введите <b>название</b> товара:")
+    await state.set_state(AdminStates.waiting_for_name)
 
-@dp.message_handler(state=AdminStates.waiting_for_name)
-async def add_name(message: types.Message, state: FSMContext):
+@dp.message(StateFilter(AdminStates.waiting_for_name))
+async def add_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await message.answer("Введите <b>описание</b> товара:", parse_mode="HTML")
-    await AdminStates.waiting_for_description.set()
+    await message.answer("Введите <b>описание</b> товара:")
+    await state.set_state(AdminStates.waiting_for_description)
 
-@dp.message_handler(state=AdminStates.waiting_for_description)
-async def add_description(message: types.Message, state: FSMContext):
+@dp.message(StateFilter(AdminStates.waiting_for_description))
+async def add_description(message: Message, state: FSMContext):
     await state.update_data(description=message.text)
-    await message.answer("Введите <b>цену</b> (например: от 15000 руб.):", parse_mode="HTML")
-    await AdminStates.waiting_for_price.set()
+    await message.answer("Введите <b>цену</b> (например: от 15000 руб.):")
+    await state.set_state(AdminStates.waiting_for_price)
 
-@dp.message_handler(state=AdminStates.waiting_for_price)
-async def add_price(message: types.Message, state: FSMContext):
+@dp.message(StateFilter(AdminStates.waiting_for_price))
+async def add_price(message: Message, state: FSMContext):
     data = await state.get_data()
     conn = sqlite3.connect('shop.db')
     cur = conn.cursor()
@@ -422,11 +405,10 @@ async def add_price(message: types.Message, state: FSMContext):
     conn.commit()
     conn.close()
     await message.answer("✅ Товар добавлен!")
-    await state.finish()
+    await state.clear()
 
 # ================= ФУНКЦИЯ ДЛЯ ПИНГОВАНИЯ =================
 async def ping_self():
-    """Каждую минуту отправляет GET-запрос к себе, чтобы Render не засыпал"""
     while True:
         try:
             async with aiohttp.ClientSession() as session:
@@ -434,13 +416,15 @@ async def ping_self():
                     print(f"[PING] {datetime.now().strftime('%H:%M:%S')} - Status: {response.status}")
         except Exception as e:
             print(f"[PING ERROR] {e}")
-        await asyncio.sleep(60)  # Пауза 60 секунд
+        await asyncio.sleep(60)
 
 # ================= ЗАПУСК =================
-if __name__ == "__main__":
+async def main():
+    logging.basicConfig(level=logging.INFO)
     # Запускаем пингование в фоновом режиме
-    loop = asyncio.get_event_loop()
-    loop.create_task(ping_self())
-    
+    asyncio.create_task(ping_self())
     # Запускаем бота
-    executor.start_polling(dp, skip_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
